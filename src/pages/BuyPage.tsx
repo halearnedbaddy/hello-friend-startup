@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams, Link, useSearchParams } from 'react-router-dom';
 import { useToast } from '@/hooks/use-toast';
 import { useCurrency } from '@/hooks/useCurrency';
 import { LoaderIcon, ShieldIcon, CheckCircleIcon, ChevronRightIcon, XIcon } from '@/components/icons';
@@ -45,6 +45,7 @@ type CheckoutStep = 'details' | 'select-method' | 'submit-payment' | 'submitting
 
 export function BuyPage() {
   const { linkId } = useParams<{ linkId: string }>();
+  const [searchParams] = useSearchParams();
   const { toast } = useToast();
   const { formatPrice } = useCurrency();
   const [link, setLink] = useState<PaymentLinkData | null>(null);
@@ -60,6 +61,7 @@ export function BuyPage() {
   const [submitting, setSubmitting] = useState(false);
   const [transactionId, setTransactionId] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
+  const [paystackSuccess, setPaystackSuccess] = useState(false);
 
   const [buyerInfo, setBuyerInfo] = useState({
     name: '',
@@ -67,6 +69,18 @@ export function BuyPage() {
     email: '',
     address: '',
   });
+
+  // Handle return from Paystack
+  useEffect(() => {
+    const paymentStatus = searchParams.get('payment');
+    const reference = searchParams.get('reference');
+    if (paymentStatus === 'success' && reference) {
+      setPaystackSuccess(true);
+      setShowCheckout(true);
+      setCheckoutStep('success');
+      setTransactionCode(reference);
+    }
+  }, [searchParams]);
 
   useEffect(() => {
     if (linkId) loadPaymentLink();
@@ -147,12 +161,76 @@ export function BuyPage() {
     }
   };
 
-  const handleSelectMethod = (method: { id: string; type: string }) => {
+  const handleSelectMethod = async (method: { id: string; type: string }) => {
     const found = sellerMethods.find(m => m.id === method.id);
-    if (found) {
-      setSelectedMethod(found);
-      setCheckoutStep('submit-payment');
+    if (!found) return;
+
+    setSelectedMethod(found);
+
+    // If Paystack selected, create order then redirect to Paystack checkout
+    if (found.payment_type === 'PAYSTACK') {
+      setSubmitting(true);
+      setCheckoutStep('submitting');
+      try {
+        // Step 1: Create order
+        const orderResponse = await fetch(`${SUPABASE_URL}/functions/v1/links-api/${linkId}/purchase`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', apikey: SUPABASE_ANON_KEY },
+          body: JSON.stringify({
+            buyerName: buyerInfo.name,
+            buyerPhone: buyerInfo.phone || undefined,
+            buyerEmail: buyerInfo.email || undefined,
+            deliveryAddress: buyerInfo.address || undefined,
+            paymentMethod: 'PAYSTACK',
+          }),
+        });
+        const orderResult = await orderResponse.json();
+        if (!orderResult.success || !orderResult.data?.transactionId) {
+          throw new Error(orderResult.error || 'Failed to create order');
+        }
+        const orderId = orderResult.data.transactionId;
+        setTransactionId(orderId);
+
+        // Step 2: Initialize Paystack checkout
+        const paystackResponse = await fetch(`${SUPABASE_URL}/functions/v1/paystack-api/initialize`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', apikey: SUPABASE_ANON_KEY },
+          body: JSON.stringify({
+            transactionId: orderId,
+            email: buyerInfo.email || `${buyerInfo.phone.replace(/[^0-9]/g, '')}@payloom.app`,
+            metadata: {
+              linkId,
+              buyerName: buyerInfo.name,
+              buyerPhone: buyerInfo.phone,
+            },
+          }),
+        });
+        const paystackResult = await paystackResponse.json();
+        if (!paystackResult.success || !paystackResult.data?.authorization_url) {
+          throw new Error(paystackResult.error || 'Failed to initialize Paystack payment');
+        }
+
+        // Store linkId for callback page redirect
+        sessionStorage.setItem('pendingPaymentLinkId', linkId || '');
+
+        // Redirect to Paystack hosted checkout page
+        window.location.href = paystackResult.data.authorization_url;
+      } catch (err: any) {
+        console.error('Paystack checkout error:', err);
+        toast({
+          title: 'Payment Error',
+          description: err.message || 'Failed to initialize payment. Please try again.',
+          variant: 'destructive',
+        });
+        setCheckoutStep('select-method');
+      } finally {
+        setSubmitting(false);
+      }
+      return;
     }
+
+    // For manual methods (M-Pesa etc.), go to submit-payment step
+    setCheckoutStep('submit-payment');
   };
 
   const copyToClipboard = async (text: string, label: string) => {
@@ -545,22 +623,28 @@ export function BuyPage() {
                   <div className="w-16 h-16 bg-primary/10 rounded-full flex items-center justify-center mx-auto mb-4">
                     <CheckCircleIcon size={32} className="text-primary" />
                   </div>
-                  <h3 className="text-lg font-bold text-foreground mb-2">Payment Submitted!</h3>
+                  <h3 className="text-lg font-bold text-foreground mb-2">
+                    {paystackSuccess ? 'Payment Successful!' : 'Payment Submitted!'}
+                  </h3>
                   <p className="text-sm text-muted-foreground mb-4">
-                    Your payment is being reviewed. You'll be notified once it's approved.
+                    {paystackSuccess
+                      ? 'Your payment has been confirmed via Paystack. Your order is being processed.'
+                      : 'Your payment is being reviewed. You\'ll be notified once it\'s approved.'}
                   </p>
                   <div className="bg-muted rounded-lg p-4 text-left text-sm space-y-2 mb-4">
                     {transactionId && <p>Order ID: <span className="font-mono font-bold">{transactionId}</span></p>}
-                    <p>Transaction Code: <span className="font-mono font-bold">{transactionCode}</span></p>
-                    <p>Status: <span className="px-2 py-0.5 bg-accent/20 text-accent rounded-full text-xs font-medium">Under Review</span></p>
+                    {transactionCode && <p>Reference: <span className="font-mono font-bold">{transactionCode}</span></p>}
+                    <p>Status: <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${paystackSuccess ? 'bg-green-100 text-green-700' : 'bg-accent/20 text-accent'}`}>
+                      {paystackSuccess ? 'Confirmed' : 'Under Review'}
+                    </span></p>
                   </div>
                   <div className="bg-primary/5 border border-primary/20 rounded-lg p-3 text-sm text-left mb-4">
                     <ShieldIcon size={16} className="inline text-primary mr-1" />
                     Your payment is protected by Halearnedu Web. If there's any issue, we'll process a full refund.
                   </div>
-                  <button onClick={() => { if (transactionId) { window.location.href = `/payment-success/${transactionId}`; } else { setShowCheckout(false); setCheckoutStep('details'); } }}
+                  <button onClick={() => { setShowCheckout(false); setCheckoutStep('details'); }}
                     className="w-full py-3 bg-primary text-primary-foreground rounded-lg font-semibold hover:bg-primary/90 transition">
-                    View Payment Status
+                    {paystackSuccess ? 'Done' : 'View Payment Status'}
                   </button>
                 </div>
               )}

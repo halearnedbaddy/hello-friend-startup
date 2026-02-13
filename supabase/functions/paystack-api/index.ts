@@ -21,7 +21,7 @@ Deno.serve(async (req: Request) => {
   const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
   const secretKey = Deno.env.get("PAYSTACK_SECRET_KEY");
   const publicKey = Deno.env.get("PAYSTACK_PUBLIC_KEY") || "";
-  const frontendUrl = Deno.env.get("FRONTEND_URL") || "http://localhost:5173";
+  const frontendUrl = Deno.env.get("FRONTEND_URL") || "https://id-preview--556cf1f5-b269-43e9-8cc1-cbc09a2f499a.lovable.app";
   const platformFeePercent = parseFloat(Deno.env.get("PLATFORM_FEE_PERCENT") || "5");
 
   const supabase = createClient(supabaseUrl, supabaseServiceKey);
