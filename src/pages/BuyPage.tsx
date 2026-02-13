@@ -6,6 +6,7 @@ import { LoaderIcon, ShieldIcon, CheckCircleIcon, ChevronRightIcon, XIcon } from
 import { Copy } from 'lucide-react';
 import { SUPABASE_ANON_KEY, SUPABASE_URL } from '@/lib/supabaseProject';
 import { validateTransactionCode } from '@/lib/transactionValidation';
+import { PaymentMethodModal } from '@/components/PaymentMethodModal';
 
 interface PaymentLinkData {
   id: string;
@@ -146,9 +147,12 @@ export function BuyPage() {
     }
   };
 
-  const handleSelectMethod = (method: SellerPaymentMethod) => {
-    setSelectedMethod(method);
-    setCheckoutStep('submit-payment');
+  const handleSelectMethod = (method: { id: string; type: string }) => {
+    const found = sellerMethods.find(m => m.id === method.id);
+    if (found) {
+      setSelectedMethod(found);
+      setCheckoutStep('submit-payment');
+    }
   };
 
   const copyToClipboard = async (text: string, label: string) => {
@@ -434,14 +438,14 @@ export function BuyPage() {
       </main>
 
       {/* Checkout Modal */}
-      {showCheckout && (
+      {showCheckout && checkoutStep !== 'select-method' && (
         <div className="fixed inset-0 z-50 flex items-center justify-center">
           <div className="absolute inset-0 bg-black/50" onClick={() => !submitting && setShowCheckout(false)} />
           <div className="relative bg-card rounded-lg shadow-xl w-full max-w-md mx-4 max-h-[90vh] overflow-y-auto border border-border">
             <div className="p-6 border-b border-border flex items-center justify-between">
               <h2 className="text-xl font-bold text-foreground">
                 {checkoutStep === 'details' && 'Your Details'}
-                {checkoutStep === 'select-method' && 'Select Payment Method'}
+                {(checkoutStep as string) === 'select-method' && 'Select Payment Method'}
                 {checkoutStep === 'submit-payment' && 'Complete Payment'}
                 {checkoutStep === 'submitting' && 'Submitting...'}
                 {checkoutStep === 'success' && 'Payment Submitted!'}
@@ -495,37 +499,7 @@ export function BuyPage() {
                 </div>
               )}
 
-              {/* Step: Select Payment Method */}
-              {checkoutStep === 'select-method' && (
-                <div className="space-y-3">
-                  <p className="text-sm text-muted-foreground">Choose how you'd like to pay:</p>
-                  {sellerMethods.map(method => {
-                    const details = method.details || {};
-                    return (
-                      <button key={method.id} onClick={() => handleSelectMethod(method)}
-                        className="w-full flex items-center gap-4 p-4 border-2 border-border rounded-lg hover:border-primary/60 hover:bg-primary/5 transition text-left">
-                        <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
-                          <span className="text-primary font-bold text-sm">
-                            {method.payment_type === 'PAYSTACK' ? '💳' : method.payment_type === 'PAYBILL' ? '📱' : method.payment_type === 'TILL' ? 'TL' : method.payment_type === 'BANK_ACCOUNT' ? '🏦' : '📱'}
-                          </span>
-                        </div>
-                        <div className="flex-1">
-                          <p className="font-semibold text-foreground text-sm">{method.provider}</p>
-                          <p className="text-xs text-muted-foreground">
-                            {method.payment_type === 'PAYSTACK' && 'Card, bank transfer, or USSD'}
-                            {details.paybill_number && `Paybill: ${details.paybill_number} | Acc: ${details.account_number}`}
-                            {details.till_number && `Till: ${details.till_number}`}
-                            {details.phone_number && `Phone: ${details.phone_number}`}
-                            {details.bank_name && `${details.bank_name}`}
-                          </p>
-                        </div>
-                        <ChevronRightIcon size={18} className="text-muted-foreground" />
-                      </button>
-                    );
-                  })}
-                  <button onClick={() => setCheckoutStep('details')} className="w-full text-sm text-muted-foreground hover:text-foreground py-2">← Back</button>
-                </div>
-              )}
+              {/* Step: Select Payment Method - rendered as overlay modal */}
 
               {/* Step: Submit Payment */}
               {checkoutStep === 'submit-payment' && selectedMethod && (
@@ -594,6 +568,37 @@ export function BuyPage() {
           </div>
         </div>
       )}
+
+      {/* Payment Method Selection Modal */}
+      <PaymentMethodModal
+        isOpen={checkoutStep === 'select-method'}
+        onClose={() => { setCheckoutStep('details'); }}
+        onBack={() => setCheckoutStep('details')}
+        onContinue={(method) => handleSelectMethod(method)}
+        product={{
+          name: link.productName,
+          price: link.price,
+          currency: link.currency,
+          image: link.images?.[0],
+        }}
+        methods={sellerMethods.map(m => ({
+          id: m.id,
+          type: m.payment_type === 'PAYSTACK' ? 'paystack' as const : 'mpesa' as const,
+          name: m.payment_type === 'PAYSTACK' ? 'Pay via Paystack' : `Pay via ${m.provider}`,
+          description: m.payment_type === 'PAYSTACK'
+            ? 'Cards, M-Pesa STK Push, Bank Transfer'
+            : m.details?.paybill_number
+              ? `Paybill ${m.details.paybill_number} • Account ${m.details.account_number}`
+              : m.details?.till_number
+                ? `Till: ${m.details.till_number}`
+                : m.provider,
+          icon: m.payment_type === 'PAYSTACK' ? (
+            <div className="w-11 h-11 rounded-[10px] flex items-center justify-center text-white font-bold text-sm shrink-0" style={{ background: '#00c3f7' }}>💳</div>
+          ) : (
+            <div className="w-11 h-11 rounded-[10px] flex items-center justify-center font-bold text-xl shrink-0" style={{ background: '#d4f4dd', color: '#00a86b' }}>M-P</div>
+          ),
+        }))}
+      />
     </div>
   );
 }
